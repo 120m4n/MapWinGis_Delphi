@@ -62,15 +62,13 @@ end;
 
 procedure TForm2.FormShow(Sender: TObject);
 var
-objProj:IGeoProjection;
+  objProj:IGeoProjection;
 begin
-objProj := CoGeoProjection.Create;
-objProj.ImportFromEPSG(4326);
-Map1.GeoProjection := objProj;
-map1.Tiles.UseCache[1] := True;
-Map1.Tiles.MaxCacheSize[1] := 12000;
-
-//Map1.Projection := PROJECTION_WGS84;
+  objProj := CoGeoProjection.Create;
+  objProj.ImportFromEPSG(4326);
+  Map1.GeoProjection := objProj;
+  map1.Tiles.UseCache[1] := True;
+  Map1.Tiles.MaxCacheSize[1] := 12000;
 
 end;
 
