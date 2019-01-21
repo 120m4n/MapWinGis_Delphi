@@ -1,0 +1,8 @@
+﻿[Map1]
+Coordinates=10,10,73,80
+Visible=True
+ExplicitSubNodes=Projection;TileProvider
+
+[]
+Coordinates=65,1,91,36
+
