@@ -37,8 +37,8 @@ begin
   Map1.LockWindow(lmLock);
   Map1.RemoveAllLayers;
 
-  OpenDialog1.InitialDir := ExtractFilePath(ParamStr(0)) + 'Maps\';
-  SetCurrentDir(ExtractFileDir(ParamStr(0)) + 'Maps\');
+  OpenDialog1.InitialDir := ExtractFilePath(ParamStr(0)) + '/Maps/';
+  SetCurrentDir(ExtractFileDir(ParamStr(0)) + '/Maps/');
   if (opendialog1.Execute) and (opendialog1.FileName <> '') then
   begin
 
