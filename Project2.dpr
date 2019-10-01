@@ -1,8 +1,8 @@
-program MapGisDelphi;
+program Project2;
 
 uses
   Vcl.Forms,
-  uMap in 'uMap.pas' {Form2},
+  uMap2 in 'uMap2.pas' {Form3},
   MapWinGIS_TLB in 'C:\dev\MapWinGIS\MapWinGIS_TLB.pas';
 
 {$R *.res}
@@ -10,6 +10,6 @@ uses
 begin
   Application.Initialize;
   Application.MainFormOnTaskbar := True;
-  Application.CreateForm(TForm2, Form2);
+  Application.CreateForm(TForm3, Form3);
   Application.Run;
 end.

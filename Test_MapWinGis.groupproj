@@ -1,0 +1,36 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{AED784F2-4032-46F2-A299-A2E106BE0B02}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="MapGisDelphi.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="MapGisDelphi">
+        <MSBuild Projects="MapGisDelphi.dproj"/>
+    </Target>
+    <Target Name="MapGisDelphi:Clean">
+        <MSBuild Projects="MapGisDelphi.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MapGisDelphi:Make">
+        <MSBuild Projects="MapGisDelphi.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="MapGisDelphi"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="MapGisDelphi:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="MapGisDelphi:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
