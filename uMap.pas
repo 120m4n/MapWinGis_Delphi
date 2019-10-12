@@ -140,6 +140,9 @@ begin
     shp := CoShapefile.Create;
     if shp.Open(fName, nil)then
    begin
+     if shp.HasSpatialIndex then shp.UseSpatialIndex := True; // showmessage('hast index');
+     //else
+        //shp.CreateSpatialIndex(fName);
      HandleLayer := Map1.AddLayer(shp,True);
      Map1.ZoomToLayer(HandleLayer)
    end
@@ -261,10 +264,10 @@ var
    filter:string;
 begin
   //layer := 'D:\Bibliotecas\Documentos\Embarcadero\Studio\Projects\MapWinGis_Delphi\Win32\Debug\vector.json';
-  filter := 'Esri Shapefile (*.shp)|*.SHP|'+
+  filter := 'GeoPackage         (*.gpkg)|*.GPKG|'+
+  'Esri Shapefile (*.shp)|*.SHP|'+
   'Vector GeoJSON files   (*.json)|*.JSON|'+
   'Sqlite Vector      (*.sqlite)|*.SQLITE|'+
-  'GeoPackage         (*.gpkg)|*.GPKG|'+
   'Others Files Archives        (*.*)|*.*|';
   layer := '';
   dlg := TOpenDialog.Create(nil);
@@ -334,6 +337,7 @@ begin
   //if not ds.Open('WFS:http://192.168.1.41:8080/geoserver/GIS/ows') then
   if not ds.Open('http://192.168.1.41:8080/geoserver/GIS/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=GIS%3Aapoyo&bbox=-73.130,7,-73.110,8&outputFormat=application%2Fjson') then
 
+
   begin
     ShowMessage('Failed to establish connection; '+ ds.GdalLastErrorMsg);
   end
@@ -363,18 +367,20 @@ begin
   layerhandle:=-1;
   WmsLayer := CoWmsLayer.Create;
   ext := CoExtents.Create;
-  ext.SetBounds(-75,5,0,-72,9,0);
-  WmsLayer.BaseUrl := 'http://192.168.1.41:8080/geoserver/GIS/wms';
+  ext.SetBounds(-20037508.3,-20037508.3,0,20037508.3,20037508.3,0);
+  //minx="-20037508.342789" miny="-20037508.342789" maxx="20037508.342789" maxy="20037508.342789"
+  //WmsLayer.BaseUrl := 'http://192.168.1.41:8080/geoserver/GIS/wms';
+  WmsLayer.BaseUrl := 'http://192.168.1.15:8080/services/wms';
   wmslayer.BoundingBox := ext;
   wmslayer.Contrast := 1.0;
   wmsLayer.DoCaching := false;
-  wmsLayer.Epsg := 4326;
+  wmsLayer.Epsg := 3857;
   wmsLayer.Format := 'image%2Fpng';
   wmsLayer.Gamma := 1.0;
-  wmsLayer.Layers := 'GIS:predio';
-  wmsLayer.Name := 'predio';
+  wmsLayer.Layers := 'osm-bright-2';
+  wmsLayer.Name := 'osm-bright-2';
   wmsLayer.Opacity := 255;
-  wmsLayer.UseCache := True;
+  wmsLayer.UseCache := false;
   wmsLayer.Id := 1;
   wmsLayer.UseTransparentColor := false;
   wmsLayer.Key := inttostr(wvAuto);
@@ -466,11 +472,11 @@ var
 begin
 
  gs := CoGlobalSettings.Create;
- ext := CoExtents.Create;
+ //ext := CoExtents.Create;
  gs.ShapefileFastMode := True;
  gs.RandomColorSchemeForGrids := True;
  //gs.AllowLayersWithoutProjections := True;
- gs.ReprojectLayersOnAdding := True ;
+ //gs.ReprojectLayersOnAdding := True ;
 //gs.StartLogTileRequests('TilesReport.txt',False);
   gs.TilesThreadPoolSize := 3;
  Map1.TileProvider := $FFFFFFFF;

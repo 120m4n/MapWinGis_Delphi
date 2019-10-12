@@ -1,1 +1,0 @@
-# MapWinGis_Delphi
