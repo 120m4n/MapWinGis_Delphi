@@ -1,12 +1,12 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{AED784F2-4032-46F2-A299-A2E106BE0B02}</ProjectGuid>
+        <ProjectGuid>{A31CAE1F-150F-465F-84A8-94C12D7FA001}</ProjectGuid>
     </PropertyGroup>
     <ItemGroup>
         <Projects Include="MapGisDelphi.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="Test.dproj">
+        <Projects Include="..\GeoDa_Panel\Panel_Geodatabase.dproj">
             <Dependencies/>
         </Projects>
     </ItemGroup>
@@ -26,23 +26,23 @@
     <Target Name="MapGisDelphi:Make">
         <MSBuild Projects="MapGisDelphi.dproj" Targets="Make"/>
     </Target>
-    <Target Name="Test">
-        <MSBuild Projects="Test.dproj"/>
+    <Target Name="Panel_Geodatabase">
+        <MSBuild Projects="..\GeoDa_Panel\Panel_Geodatabase.dproj"/>
     </Target>
-    <Target Name="Test:Clean">
-        <MSBuild Projects="Test.dproj" Targets="Clean"/>
+    <Target Name="Panel_Geodatabase:Clean">
+        <MSBuild Projects="..\GeoDa_Panel\Panel_Geodatabase.dproj" Targets="Clean"/>
     </Target>
-    <Target Name="Test:Make">
-        <MSBuild Projects="Test.dproj" Targets="Make"/>
+    <Target Name="Panel_Geodatabase:Make">
+        <MSBuild Projects="..\GeoDa_Panel\Panel_Geodatabase.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="MapGisDelphi;Test"/>
+        <CallTarget Targets="MapGisDelphi;Panel_Geodatabase"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="MapGisDelphi:Clean;Test:Clean"/>
+        <CallTarget Targets="MapGisDelphi:Clean;Panel_Geodatabase:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="MapGisDelphi:Make;Test:Make"/>
+        <CallTarget Targets="MapGisDelphi:Make;Panel_Geodatabase:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

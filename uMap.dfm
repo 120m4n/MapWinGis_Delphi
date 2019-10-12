@@ -74,6 +74,42 @@ object Form2: TForm2
       Height = 17
       TabOrder = 5
     end
+    object Button5: TButton
+      Left = 591
+      Top = 17
+      Width = 75
+      Height = 25
+      Caption = 'WFS'
+      TabOrder = 6
+      OnClick = Button5Click
+    end
+    object Button6: TButton
+      Left = 688
+      Top = 17
+      Width = 75
+      Height = 25
+      Caption = 'WMS'
+      TabOrder = 7
+      OnClick = Button6Click
+    end
+    object Button7: TButton
+      Left = 792
+      Top = 17
+      Width = 75
+      Height = 25
+      Caption = 'LoadDB'
+      TabOrder = 8
+      OnClick = Button7Click
+    end
+    object Button8: TButton
+      Left = 904
+      Top = 17
+      Width = 75
+      Height = 25
+      Caption = 'PostGis'
+      TabOrder = 9
+      OnClick = Button8Click
+    end
   end
   object Map1: TMap
     Left = 177
@@ -86,10 +122,10 @@ object Form2: TForm2
     ExplicitTop = 63
     ControlData = {
       31000C00486B00008231000000000000FFFFFF007B14AE47E17A943F00003333
-      33333333D33F00000000001400000001000000000000000000E03F0000010000
+      33333333D33F00000000001400000001000001000000000000E03F0000010000
       0000000001000000000100000002000000030000000600000001000000FFFFFF
       FF00000000000000000000000000000000000000000000000000000000000000
-      000000000001FF0000000000000000000100000004000000FFFFFFFFFFFFFFFF
+      000000000001000000000000000000000100000004000000FFFFFFFFFFFFFFFF
       000000000000}
   end
   object ListBox1: TListBox
