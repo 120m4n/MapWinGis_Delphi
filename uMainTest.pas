@@ -5,7 +5,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.OleCtrls, MapWinGIS_TLB,
-  Vcl.StdCtrls, Vcl.ExtCtrls;
+  Vcl.StdCtrls, Vcl.ExtCtrls, uAppLogger;
 
 type
   TForm3 = class(TForm)
@@ -35,10 +35,15 @@ var
   dlg : TOpenDialog;
   selectedFile:string;
 begin
-    try
-      fm := CoFileManager.Create;
-      dlg := TOpenDialog.Create(nil);
+  selectedFile := '';
+  hndl := -1;
+  try
+    fm := CoFileManager.Create;
+    if not Assigned(fm) then
+      Exit;
 
+    dlg := TOpenDialog.Create(nil);
+    try
       dlg.InitialDir := ExtractFilePath(ParamStr(0));
       dlg.Filter := fm.CdlgFilter;
       if dlg.Execute(Handle) then
@@ -46,33 +51,46 @@ begin
     finally
       dlg.Free;
     end;
-    obj := fm.Open(selectedFile,fosAutoDetect,Nil);
-    if (fm.LastOpenIsSuccess) then
-    begin
-       hndl := Map2.AddLayer(obj,true);
-       if hndl <> -1 then
-       begin
-       ShowMessage('Layer was added to the map. Open strategy:' + inttostr(ord(fm.LastOpenStrategy)));
 
-       end;
+    if selectedFile = '' then
+      Exit;
+
+    obj := fm.Open(selectedFile,fosAutoDetect,Nil);
+    if fm.LastOpenIsSuccess then
+    begin
+      hndl := Map2.AddLayer(obj,true);
+      if hndl <> -1 then
+      begin
+        ShowMessage('Layer was added to the map. Open strategy:' + inttostr(ord(fm.LastOpenStrategy)));
+        AppLogger.Info('uMainTest.Button1Click', 'Layer loaded: ' + selectedFile);
+      end;
     end
     else
-    begin
-
-    end;
+      AppLogger.Warning('uMainTest.Button1Click', 'Open failed for: ' + selectedFile);
     map2.SetFocus;
+  except
+    on E: Exception do
+    begin
+      AppLogger.Error('uMainTest.Button1Click', E.ClassName + ': ' + E.Message);
+      ShowMessage(E.Message);
+    end;
+  end;
 end;
 
 procedure TForm3.FormCreate(Sender: TObject);
 var
   gs: GlobalSettings;
 begin
-
- gs := CoGlobalSettings.Create;
- gs.ShapefileFastMode := True;
- gs.RandomColorSchemeForGrids := True;
- //gs.AllowLayersWithoutProjections := True;
- gs.ReprojectLayersOnAdding := True;
+  try
+    gs := CoGlobalSettings.Create;
+    gs.ShapefileFastMode := True;
+    gs.RandomColorSchemeForGrids := True;
+    gs.ReprojectLayersOnAdding := True;
+    AppLogger.Info('uMainTest.FormCreate', 'Form initialized');
+  except
+    on E: Exception do
+      AppLogger.Error('uMainTest.FormCreate', E.ClassName + ': ' + E.Message);
+  end;
 end;
 
 end.
