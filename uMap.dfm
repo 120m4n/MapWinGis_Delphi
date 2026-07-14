@@ -141,4 +141,9 @@ object Form2: TForm2
     Left = 672
     Top = 136
   end
+  object FDGUIxWaitCursor1: TFDGUIxWaitCursor
+    Provider = 'Forms'
+    Left = 576
+    Top = 176
+  end
 end

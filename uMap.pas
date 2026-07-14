@@ -4,18 +4,21 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, System.StrUtils,
+  System.Math,
   Data.DB,
+  Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.OleCtrls, MapWinGIS_TLB,
   Vcl.StdCtrls, Vcl.ExtCtrls, Winapi.Activex, Vcl.Buttons, uAppLogger,
-  FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Param, FireDAC.Stan.Error,
+  FireDAC.Stan.Async, FireDAC.Stan.Intf, FireDAC.Stan.Def, FireDAC.Stan.Option,
+  FireDAC.Stan.Param, FireDAC.Stan.Error,
   FireDAC.Comp.Client, FireDAC.DApt, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef,
-  FireDAC.UI.Intf;
+  FireDAC.UI.Intf, uSetProjectionForm, FireDAC.VCLUI.Wait, FireDAC.Comp.UI;
 
 type
-  TGisTempPoint = record
-    X: Double;
-    Y: Double;
-    Temperature: Double;
+  TTempSection = record
+    BeginValue: Double;
+    EndValue: Double;
+    ColorValue: Integer;
   end;
 
 type
@@ -34,6 +37,9 @@ type
     Button6: TButton;
     Button7: TButton;
     Button8: TButton;
+    FDGUIxWaitCursor1: TFDGUIxWaitCursor;
+    procedure ListBox1DblClick(Sender: TObject);
+    procedure ListBox1KeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure FormShow(Sender: TObject);
     procedure btnOpenClick(Sender: TObject);
     procedure Button1Click(Sender: TObject);
@@ -49,22 +55,34 @@ type
     procedure Button6Click(Sender: TObject);
     procedure Button7Click(Sender: TObject);
     procedure Button8Click(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
   private
     { Private declarations }
     lasthandle: Integer;
     FProjectFileName: string;
     FProjectDirty: Boolean;
+    FDataConnection: TFDConnection;
+    FNearestPointQuery: TFDQuery;
+    FTemperatureLayerHandle: Integer;
+    FBtnSaveAs: TButton;
+    FBtnZoomMax: TButton;
     function TryGetSelectedLayerHandle(out ALayerHandle: Integer): Boolean;
     function TryGetImageByHandle(const AHandle: Integer; out AImage: IImage): Boolean;
     procedure LogException(const AMethod: string; const E: Exception);
+    function PromptSaveIfDirty: Boolean;
     procedure MarkProjectDirty;
     procedure RefreshLayerList;
     procedure LoadProjectFromFile(const AFileName: string);
     function SaveProjectToFile(const AFileName: string): Boolean;
     procedure SaveProjectWithPrompt;
-    procedure SetProjectionInteractive;
     function ResolveDefaultDataDb: string;
+    function ReadSections(const AConnection: TFDConnection; out ASections: TArray<TTempSection>): Boolean;
+    function ColorForTemperature(const ASections: TArray<TTempSection>; const ATemperature: Double): Integer;
+    procedure BtnSaveAsClick(Sender: TObject);
+    procedure BtnZoomMaxClick(Sender: TObject);
     procedure LoadTemperatureData(const ADatabaseFile: string);
+    procedure MapMouseMove(Sender: TObject; Button: Smallint; Shift: Smallint; x: Integer; y: Integer);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
   public
     { Public declarations }
   end;
@@ -162,51 +180,6 @@ begin
     raise Exception.Create('Failed to save project.');
 end;
 
-procedure TForm2.SetProjectionInteractive;
-var
-  InputValue: string;
-  GeoProj: IGeoProjection;
-  EpsgCode: Integer;
-begin
-  InputValue := 'wgs84';
-  if not InputQuery('Set Projection', 'Use one of: empty, wgs84, google, epsg:4326', InputValue) then
-    Exit;
-
-  InputValue := Trim(LowerCase(InputValue));
-  GeoProj := CoGeoProjection.Create;
-
-  if InputValue = 'empty' then
-  begin
-    Map1.GeoProjection := GeoProj;
-  end
-  else if InputValue = 'wgs84' then
-  begin
-    if not GeoProj.SetWgs84 then
-      raise Exception.Create('Unable to set WGS84 projection.');
-    Map1.GeoProjection := GeoProj;
-  end
-  else if InputValue = 'google' then
-  begin
-    if not GeoProj.SetGoogleMercator then
-      raise Exception.Create('Unable to set Google Mercator projection.');
-    Map1.GeoProjection := GeoProj;
-  end
-  else if StartsText('epsg:', InputValue) then
-  begin
-    EpsgCode := StrToIntDef(Copy(InputValue, 6, MaxInt), -1);
-    if (EpsgCode <= 0) or (not GeoProj.ImportFromEPSG(EpsgCode)) then
-      raise Exception.Create('Invalid EPSG code.');
-    Map1.GeoProjection := GeoProj;
-  end
-  else
-  begin
-    raise Exception.Create('Unknown projection command.');
-  end;
-
-  MarkProjectDirty;
-  Map1.Redraw;
-end;
-
 function TForm2.ResolveDefaultDataDb: string;
 const
   CandidateCount = 3;
@@ -229,77 +202,78 @@ begin
   end;
 end;
 
-procedure TForm2.LoadTemperatureData(const ADatabaseFile: string);
+function TForm2.ReadSections(const AConnection: TFDConnection; out ASections: TArray<TTempSection>): Boolean;
 var
-  Conn: TFDConnection;
-  QPoints: TFDQuery;
-  Sf: IShapefile;
-  Shp: IShape;
-  Pnt: MapWinGIS_TLB.Point;
-  LayerHandle: Integer;
+  QSections: TFDQuery;
+  Item: TTempSection;
+  Count: Integer;
 begin
-  Conn := TFDConnection.Create(nil);
-  QPoints := TFDQuery.Create(nil);
+  SetLength(ASections, 0);
+  Result := False;
+  QSections := TFDQuery.Create(nil);
   try
-    Conn.LoginPrompt := False;
-    Conn.Params.Clear;
-    Conn.Params.Values['DriverID'] := 'SQLite';
-    Conn.Params.Values['Database'] := ADatabaseFile;
-    Conn.Connected := True;
+    QSections.Connection := AConnection;
+    QSections.SQL.Text :=
+      'SELECT section_begin, section_end, color ' +
+      'FROM section ORDER BY section_begin';
+    QSections.Open;
 
-    QPoints.Connection := Conn;
-    QPoints.SQL.Text := 'SELECT x, y, temperature FROM Point ORDER BY temperature';
-    QPoints.Open;
-
-    Sf := CoShapefile.Create;
-    if not Sf.CreateNewWithShapeID('', SHP_POINT) then
-      raise Exception.Create('Failed to initialize in-memory point shapefile.');
-
-    while not QPoints.Eof do
+    Count := 0;
+    while not QSections.Eof do
     begin
-      Shp := CoShape.Create;
-      if not Shp.Create(SHP_POINT) then
-        raise Exception.Create('Failed to create point geometry.');
-
-      Pnt := CoPoint.Create;
-      Pnt.x := QPoints.FieldByName('x').AsFloat;
-      Pnt.y := QPoints.FieldByName('y').AsFloat;
-      if not Shp.InsertPoint(Pnt, 0) then
-        raise Exception.Create('Failed to insert point geometry.');
-
-      if Sf.EditAddShape(Shp) < 0 then
-        raise Exception.Create('Failed to append point shape.');
-
-      QPoints.Next;
+      Item.BeginValue := QSections.FieldByName('section_begin').AsFloat;
+      Item.EndValue := QSections.FieldByName('section_end').AsFloat;
+      Item.ColorValue := QSections.FieldByName('color').AsInteger;
+      SetLength(ASections, Count + 1);
+      ASections[Count] := Item;
+      Inc(Count);
+      QSections.Next;
     end;
+    Result := Length(ASections) > 0;
+  except
+    on E: Exception do
+      LogException('ReadSections', E);
+  end;
+  QSections.Free;
+end;
 
-    Map1.LockWindow(lmLock);
-    try
-      LayerHandle := Map1.AddLayer(Sf, True);
-      if LayerHandle = -1 then
-        raise Exception.Create('Failed to add temperature layer to map.');
-
-      Map1.LayerName[LayerHandle] := 'Temperature Points';
-      Map1.ShapeLayerDrawPoint[LayerHandle] := True;
-      Map1.ShapeLayerPointSize[LayerHandle] := 6;
-      Map1.ShapeLayerPointColor[LayerHandle] := clRed;
-      Map1.ZoomToLayer(LayerHandle);
-      Map1.Redraw;
-    finally
-      Map1.LockWindow(lmUnlock);
+function TForm2.ColorForTemperature(const ASections: TArray<TTempSection>; const ATemperature: Double): Integer;
+var
+  I: Integer;
+begin
+  Result := clRed;
+  for I := Low(ASections) to High(ASections) do
+  begin
+    if InRange(ATemperature, ASections[I].BeginValue, ASections[I].EndValue) then
+    begin
+      Result := ASections[I].ColorValue;
+      Exit;
     end;
-
-    RefreshLayerList;
-    MarkProjectDirty;
-  finally
-    QPoints.Free;
-    Conn.Free;
   end;
 end;
 
 procedure TForm2.LogException(const AMethod: string; const E: Exception);
 begin
   AppLogger.Error('uMap.' + AMethod, E.ClassName + ': ' + E.Message);
+end;
+
+function TForm2.PromptSaveIfDirty: Boolean;
+var
+  Choice: Integer;
+begin
+  Result := True;
+  if not FProjectDirty then
+    Exit;
+
+  Choice := MessageDlg('Project has unsaved changes. Save now?', mtConfirmation, [mbYes, mbNo, mbCancel], 0);
+  case Choice of
+    mrYes:
+      SaveProjectWithPrompt;
+    mrNo:
+      ;
+    mrCancel:
+      Result := False;
+  end;
 end;
 
 function TForm2.TryGetImageByHandle(const AHandle: Integer; out AImage: IImage): Boolean;
@@ -342,7 +316,7 @@ begin
   end;
 
   try
-    ALayerHandle := Map1.LayerHandle[ListBox1.ItemIndex];
+    ALayerHandle := NativeInt(ListBox1.Items.Objects[ListBox1.ItemIndex]);
     Result := ALayerHandle >= 0;
     if not Result then
       AppLogger.Warning('uMap.TryGetSelectedLayerHandle', 'Map returned invalid layer handle');
@@ -500,6 +474,9 @@ var
   ProjectFile: string;
 begin
   try
+    if not PromptSaveIfDirty then
+      Exit;
+
     ProjectFile := '';
     with TOpenDialog.Create(nil) do
       try
@@ -536,8 +513,12 @@ end;
 procedure TForm2.Button3Click(Sender: TObject);
 begin
   try
-    SetProjectionInteractive;
-    Map1.SetFocus;
+    if ExecuteSetProjectionDialog(Map1) then
+    begin
+      MarkProjectDirty;
+      Map1.Redraw;
+      Map1.SetFocus;
+    end;
   except
     on E: Exception do
       LogException('Button3Click', E);
@@ -547,12 +528,16 @@ end;
 procedure TForm2.Button4Click(Sender: TObject);
 begin
   try
+    if not PromptSaveIfDirty then
+      Exit;
+
     Map1.LockWindow(lmLock);
     try
       Map1.RemoveAllLayers;
       Map1.Redraw;
       ListBox1.Items.Clear;
       lasthandle := -1;
+      FTemperatureLayerHandle := -1;
       FProjectFileName := '';
       FProjectDirty := False;
     finally
@@ -626,6 +611,119 @@ begin
   end;
 end;
 
+procedure TForm2.MapMouseMove(Sender: TObject; Button: Smallint; Shift: Smallint; x: Integer; y: Integer);
+var
+  ProjX: Double;
+  ProjY: Double;
+  Temperature: Double;
+begin
+  if (FTemperatureLayerHandle < 0) or (not Assigned(FNearestPointQuery)) then
+    Exit;
+
+  try
+    Map1.PixelToProj(x, y, ProjX, ProjY);
+    FNearestPointQuery.Close;
+    FNearestPointQuery.ParamByName('x').AsFloat := ProjX;
+    FNearestPointQuery.ParamByName('y').AsFloat := ProjY;
+    FNearestPointQuery.Open;
+
+    if not FNearestPointQuery.Eof then
+    begin
+      Temperature := FNearestPointQuery.FieldByName('temperature').AsFloat;
+      Caption := Format('Form2 - Temp %.2f @ %.6f, %.6f', [Temperature, ProjX, ProjY]);
+    end;
+  except
+    on E: Exception do
+      LogException('MapMouseMove', E);
+  end;
+end;
+
+procedure TForm2.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+begin
+  try
+    CanClose := PromptSaveIfDirty;
+  except
+    on E: Exception do
+    begin
+      CanClose := False;
+      LogException('FormCloseQuery', E);
+    end;
+  end;
+end;
+
+procedure TForm2.FormDestroy(Sender: TObject);
+begin
+  FreeAndNil(FNearestPointQuery);
+  FreeAndNil(FDataConnection);
+end;
+
+procedure TForm2.BtnSaveAsClick(Sender: TObject);
+var
+  SaveDialog: TSaveDialog;
+begin
+  SaveDialog := TSaveDialog.Create(nil);
+  try
+    SaveDialog.InitialDir := ExtractFilePath(ParamStr(0));
+    SaveDialog.Filter := 'MapWinGIS Project (*.mwxml)|*.mwxml';
+    SaveDialog.DefaultExt := 'mwxml';
+    if not SaveDialog.Execute(Handle) then
+      Exit;
+
+    if not SaveProjectToFile(SaveDialog.FileName) then
+      raise Exception.Create('Failed to save project as new file.');
+  finally
+    SaveDialog.Free;
+  end;
+end;
+
+procedure TForm2.BtnZoomMaxClick(Sender: TObject);
+begin
+  if Map1.NumLayers <= 0 then
+    Exit;
+  Map1.ZoomToMaxExtents;
+  Map1.Redraw;
+  Map1.SetFocus;
+end;
+
+procedure TForm2.ListBox1DblClick(Sender: TObject);
+var
+  LayerHandle: Integer;
+begin
+  try
+    if not TryGetSelectedLayerHandle(LayerHandle) then
+      Exit;
+    Map1.ZoomToLayer(LayerHandle);
+    Map1.Redraw;
+    Map1.SetFocus;
+  except
+    on E: Exception do
+      LogException('ListBox1DblClick', E);
+  end;
+end;
+
+procedure TForm2.ListBox1KeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+var
+  LayerHandle: Integer;
+begin
+  if Key <> VK_DELETE then
+    Exit;
+
+  try
+    if not TryGetSelectedLayerHandle(LayerHandle) then
+      Exit;
+
+    Map1.RemoveLayer(LayerHandle);
+    if LayerHandle = FTemperatureLayerHandle then
+      FTemperatureLayerHandle := -1;
+    RefreshLayerList;
+    Map1.Redraw;
+    MarkProjectDirty;
+  except
+    on E: Exception do
+      LogException('ListBox1KeyDown', E);
+  end;
+end;
+
 procedure TForm2.FormCreate(Sender: TObject);
 var
   gs: GlobalSettings;
@@ -642,6 +740,11 @@ begin
     Map1.Projection := PROJECTION_NONE;
     Map1.TileProvider := ProviderNone;
     Map1.SendMouseMove := True;
+    Map1.OnMouseMove := MapMouseMove;
+    Self.OnCloseQuery := FormCloseQuery;
+    Self.OnDestroy := FormDestroy;
+    ListBox1.OnDblClick := ListBox1DblClick;
+    ListBox1.OnKeyDown := ListBox1KeyDown;
 
     btnOpen.Caption := 'Add Layer';
     Button1.Caption := 'Load Project';
@@ -654,8 +757,29 @@ begin
     Button8.Caption := 'LoadData';
     CheckBox1.Visible := False;
 
+    FBtnSaveAs := TButton.Create(Self);
+    FBtnSaveAs.Parent := Panel1;
+    FBtnSaveAs.Left := 1008;
+    FBtnSaveAs.Top := 17;
+    FBtnSaveAs.Width := 85;
+    FBtnSaveAs.Height := 25;
+    FBtnSaveAs.Caption := 'Save As';
+    FBtnSaveAs.OnClick := BtnSaveAsClick;
+
+    FBtnZoomMax := TButton.Create(Self);
+    FBtnZoomMax.Parent := Panel1;
+    FBtnZoomMax.Left := 1100;
+    FBtnZoomMax.Top := 17;
+    FBtnZoomMax.Width := 90;
+    FBtnZoomMax.Height := 25;
+    FBtnZoomMax.Caption := 'Zoom Max';
+    FBtnZoomMax.OnClick := BtnZoomMaxClick;
+
     FProjectFileName := '';
     FProjectDirty := False;
+    FTemperatureLayerHandle := -1;
+    FDataConnection := nil;
+    FNearestPointQuery := nil;
     lasthandle := -1;
     AppLogger.Info('uMap.FormCreate', 'Map initialized');
   except
@@ -672,6 +796,121 @@ begin
   except
     on E: Exception do
       LogException('FormShow', E);
+  end;
+end;
+
+procedure TForm2.LoadTemperatureData(const ADatabaseFile: string);
+var
+  QPoints: TFDQuery;
+  TempValue: Double;
+  Sf: IShapefile;
+  Shp: IShape;
+  Pnt: MapWinGIS_TLB.Point;
+  Category: IShapefileCategory;
+  CategoryName: string;
+  CategoryIndex: Integer;
+  ShapeIndex: Integer;
+  LayerHandle: Integer;
+  PointIndex: Integer;
+  Sections: TArray<TTempSection>;
+begin
+  if Assigned(FNearestPointQuery) then
+    FreeAndNil(FNearestPointQuery);
+  if Assigned(FDataConnection) then
+    FreeAndNil(FDataConnection);
+
+  FDataConnection := TFDConnection.Create(nil);
+  QPoints := TFDQuery.Create(nil);
+  try
+    FDataConnection.LoginPrompt := False;
+    FDataConnection.Params.Clear;
+    FDataConnection.Params.Values['DriverID'] := 'SQLite';
+    FDataConnection.Params.Values['Database'] := ADatabaseFile;
+    FDataConnection.Connected := True;
+
+    QPoints.Connection := FDataConnection;
+    QPoints.SQL.Text := 'SELECT x, y, temperature FROM Point ORDER BY temperature';
+    QPoints.Open;
+
+    ReadSections(FDataConnection, Sections);
+
+    Sf := CoShapefile.Create;
+    if not Sf.CreateNewWithShapeID('', SHP_POINT) then
+      raise Exception.Create('Failed to initialize in-memory point shapefile.');
+
+    if Length(Sections) > 0 then
+    begin
+      for CategoryIndex := Low(Sections) to High(Sections) do
+      begin
+        CategoryName := Format('%.2f - %.2f', [Sections[CategoryIndex].BeginValue, Sections[CategoryIndex].EndValue]);
+        Category := Sf.Categories.Add(CategoryName);
+        Category.DrawingOptions.FillColor := Sections[CategoryIndex].ColorValue;
+        Category.DrawingOptions.LineColor := Sections[CategoryIndex].ColorValue;
+      end;
+    end;
+
+    while not QPoints.Eof do
+    begin
+      Shp := CoShape.Create;
+      if not Shp.Create(SHP_POINT) then
+        raise Exception.Create('Failed to create point geometry.');
+
+      Pnt := CoPoint.Create;
+      Pnt.x := QPoints.FieldByName('x').AsFloat;
+      Pnt.y := QPoints.FieldByName('y').AsFloat;
+      TempValue := QPoints.FieldByName('temperature').AsFloat;
+      PointIndex := 0;
+      if not Shp.InsertPoint(Pnt, PointIndex) then
+        raise Exception.Create('Failed to insert point geometry.');
+
+      ShapeIndex := Sf.EditAddShape(Shp);
+      if ShapeIndex < 0 then
+        raise Exception.Create('Failed to append point shape.');
+
+      if Length(Sections) > 0 then
+      begin
+        for CategoryIndex := Low(Sections) to High(Sections) do
+        begin
+          if InRange(TempValue, Sections[CategoryIndex].BeginValue, Sections[CategoryIndex].EndValue) then
+          begin
+            Sf.ShapeCategory[ShapeIndex] := CategoryIndex;
+            Break;
+          end;
+        end;
+      end;
+
+      QPoints.Next;
+    end;
+
+    Map1.LockWindow(lmLock);
+    try
+      LayerHandle := Map1.AddLayer(Sf, True);
+      if LayerHandle = -1 then
+        raise Exception.Create('Failed to add temperature layer to map.');
+
+      FTemperatureLayerHandle := LayerHandle;
+      Map1.LayerName[LayerHandle] := 'Temperature Points';
+      Map1.ShapeLayerDrawPoint[LayerHandle] := True;
+      Map1.ShapeLayerPointSize[LayerHandle] := 6;
+      Map1.ShapeLayerPointColor[LayerHandle] := clRed;
+      Map1.ZoomToLayer(LayerHandle);
+      Map1.Redraw;
+    finally
+      Map1.LockWindow(lmUnlock);
+    end;
+
+    FNearestPointQuery := TFDQuery.Create(nil);
+    FNearestPointQuery.Connection := FDataConnection;
+    FNearestPointQuery.SQL.Text :=
+      'SELECT x, y, temperature ' +
+      'FROM Point ' +
+      'ORDER BY ABS(x - :x) + ABS(y - :y) ' +
+      'LIMIT 1';
+
+    RefreshLayerList;
+    MarkProjectDirty;
+  finally
+    QPoints.Free;
   end;
 end;
 
