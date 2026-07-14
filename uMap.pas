@@ -3,9 +3,20 @@ unit uMap;
 interface
 
 uses
-  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, System.StrUtils,
+  Data.DB,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.OleCtrls, MapWinGIS_TLB,
-  Vcl.StdCtrls, Vcl.ExtCtrls, Winapi.Activex, Vcl.Buttons, uAppLogger;
+  Vcl.StdCtrls, Vcl.ExtCtrls, Winapi.Activex, Vcl.Buttons, uAppLogger,
+  FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Param, FireDAC.Stan.Error,
+  FireDAC.Comp.Client, FireDAC.DApt, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef,
+  FireDAC.UI.Intf;
+
+type
+  TGisTempPoint = record
+    X: Double;
+    Y: Double;
+    Temperature: Double;
+  end;
 
 type
   TForm2 = class(TForm)
@@ -13,7 +24,7 @@ type
     btnOpen: TButton;
     Panel1: TPanel;
     Button1: TButton;
-    Button2: TButton;
+    btnGeoDatabase: TButton;
     Button3: TButton;
     Button4: TButton;
     Map1: TMap;
@@ -27,7 +38,7 @@ type
     procedure btnOpenClick(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure FormCreate(Sender: TObject);
-    procedure Button2Click(Sender: TObject);
+    procedure btnGeoDatabaseClick(Sender: TObject);
     procedure Button3Click(Sender: TObject);
     procedure Button4Click(Sender: TObject);
     procedure BitBtn1Click(Sender: TObject);
@@ -41,9 +52,19 @@ type
   private
     { Private declarations }
     lasthandle: Integer;
+    FProjectFileName: string;
+    FProjectDirty: Boolean;
     function TryGetSelectedLayerHandle(out ALayerHandle: Integer): Boolean;
     function TryGetImageByHandle(const AHandle: Integer; out AImage: IImage): Boolean;
     procedure LogException(const AMethod: string; const E: Exception);
+    procedure MarkProjectDirty;
+    procedure RefreshLayerList;
+    procedure LoadProjectFromFile(const AFileName: string);
+    function SaveProjectToFile(const AFileName: string): Boolean;
+    procedure SaveProjectWithPrompt;
+    procedure SetProjectionInteractive;
+    function ResolveDefaultDataDb: string;
+    procedure LoadTemperatureData(const ADatabaseFile: string);
   public
     { Public declarations }
   end;
@@ -54,6 +75,227 @@ var
 implementation
 
 {$R *.dfm}
+
+procedure TForm2.MarkProjectDirty;
+begin
+  FProjectDirty := True;
+end;
+
+procedure TForm2.RefreshLayerList;
+var
+  I: Integer;
+  LayerHandle: Integer;
+  LayerName: string;
+begin
+  ListBox1.Items.BeginUpdate;
+  try
+    ListBox1.Clear;
+    for I := 0 to Map1.NumLayers - 1 do
+    begin
+      LayerHandle := Map1.LayerHandle[I];
+      LayerName := Map1.LayerName[LayerHandle];
+      if LayerName = '' then
+        LayerName := ExtractFileName(Map1.LayerFilename[LayerHandle]);
+      ListBox1.Items.AddObject(Format('%d - %s', [LayerHandle, LayerName]), TObject(NativeInt(LayerHandle)));
+    end;
+  finally
+    ListBox1.Items.EndUpdate;
+  end;
+end;
+
+procedure TForm2.LoadProjectFromFile(const AFileName: string);
+begin
+  if not FileExists(AFileName) then
+    raise Exception.Create('Project file does not exist.');
+
+  Map1.LockWindow(lmLock);
+  try
+    if not Map1.LoadMapState(AFileName, nil) then
+      raise Exception.Create('Failed to load map state: ' + AFileName);
+    FProjectFileName := AFileName;
+    FProjectDirty := False;
+    RefreshLayerList;
+    if Map1.NumLayers > 0 then
+      Map1.ZoomToMaxExtents;
+    Map1.Redraw;
+  finally
+    Map1.LockWindow(lmUnlock);
+  end;
+end;
+
+function TForm2.SaveProjectToFile(const AFileName: string): Boolean;
+begin
+  Result := False;
+  if AFileName = '' then
+    Exit;
+
+  if Map1.SaveMapState(AFileName, True, True) then
+  begin
+    FProjectFileName := AFileName;
+    FProjectDirty := False;
+    Result := True;
+  end;
+end;
+
+procedure TForm2.SaveProjectWithPrompt;
+var
+  FileName: string;
+  SaveDialog: TSaveDialog;
+begin
+  FileName := FProjectFileName;
+  if FileName = '' then
+  begin
+    SaveDialog := TSaveDialog.Create(nil);
+    try
+      SaveDialog.InitialDir := ExtractFilePath(ParamStr(0));
+      SaveDialog.Filter := 'MapWinGIS Project (*.mwxml)|*.mwxml';
+      SaveDialog.DefaultExt := 'mwxml';
+      if not SaveDialog.Execute(Handle) then
+        Exit;
+      FileName := SaveDialog.FileName;
+    finally
+      SaveDialog.Free;
+    end;
+  end;
+
+  if not SaveProjectToFile(FileName) then
+    raise Exception.Create('Failed to save project.');
+end;
+
+procedure TForm2.SetProjectionInteractive;
+var
+  InputValue: string;
+  GeoProj: IGeoProjection;
+  EpsgCode: Integer;
+begin
+  InputValue := 'wgs84';
+  if not InputQuery('Set Projection', 'Use one of: empty, wgs84, google, epsg:4326', InputValue) then
+    Exit;
+
+  InputValue := Trim(LowerCase(InputValue));
+  GeoProj := CoGeoProjection.Create;
+
+  if InputValue = 'empty' then
+  begin
+    Map1.GeoProjection := GeoProj;
+  end
+  else if InputValue = 'wgs84' then
+  begin
+    if not GeoProj.SetWgs84 then
+      raise Exception.Create('Unable to set WGS84 projection.');
+    Map1.GeoProjection := GeoProj;
+  end
+  else if InputValue = 'google' then
+  begin
+    if not GeoProj.SetGoogleMercator then
+      raise Exception.Create('Unable to set Google Mercator projection.');
+    Map1.GeoProjection := GeoProj;
+  end
+  else if StartsText('epsg:', InputValue) then
+  begin
+    EpsgCode := StrToIntDef(Copy(InputValue, 6, MaxInt), -1);
+    if (EpsgCode <= 0) or (not GeoProj.ImportFromEPSG(EpsgCode)) then
+      raise Exception.Create('Invalid EPSG code.');
+    Map1.GeoProjection := GeoProj;
+  end
+  else
+  begin
+    raise Exception.Create('Unknown projection command.');
+  end;
+
+  MarkProjectDirty;
+  Map1.Redraw;
+end;
+
+function TForm2.ResolveDefaultDataDb: string;
+const
+  CandidateCount = 3;
+var
+  Candidates: array[0..CandidateCount - 1] of string;
+  I: Integer;
+begin
+  Candidates[0] := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'data.db';
+  Candidates[1] := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'data\data.db';
+  Candidates[2] := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + '..\..\GisDEMO-sharp\GisMap\GisMap\bin\x86\Debug\data\data.db';
+
+  Result := '';
+  for I := Low(Candidates) to High(Candidates) do
+  begin
+    if FileExists(ExpandFileName(Candidates[I])) then
+    begin
+      Result := ExpandFileName(Candidates[I]);
+      Exit;
+    end;
+  end;
+end;
+
+procedure TForm2.LoadTemperatureData(const ADatabaseFile: string);
+var
+  Conn: TFDConnection;
+  QPoints: TFDQuery;
+  Sf: IShapefile;
+  Shp: IShape;
+  Pnt: MapWinGIS_TLB.Point;
+  LayerHandle: Integer;
+begin
+  Conn := TFDConnection.Create(nil);
+  QPoints := TFDQuery.Create(nil);
+  try
+    Conn.LoginPrompt := False;
+    Conn.Params.Clear;
+    Conn.Params.Values['DriverID'] := 'SQLite';
+    Conn.Params.Values['Database'] := ADatabaseFile;
+    Conn.Connected := True;
+
+    QPoints.Connection := Conn;
+    QPoints.SQL.Text := 'SELECT x, y, temperature FROM Point ORDER BY temperature';
+    QPoints.Open;
+
+    Sf := CoShapefile.Create;
+    if not Sf.CreateNewWithShapeID('', SHP_POINT) then
+      raise Exception.Create('Failed to initialize in-memory point shapefile.');
+
+    while not QPoints.Eof do
+    begin
+      Shp := CoShape.Create;
+      if not Shp.Create(SHP_POINT) then
+        raise Exception.Create('Failed to create point geometry.');
+
+      Pnt := CoPoint.Create;
+      Pnt.x := QPoints.FieldByName('x').AsFloat;
+      Pnt.y := QPoints.FieldByName('y').AsFloat;
+      if not Shp.InsertPoint(Pnt, 0) then
+        raise Exception.Create('Failed to insert point geometry.');
+
+      if Sf.EditAddShape(Shp) < 0 then
+        raise Exception.Create('Failed to append point shape.');
+
+      QPoints.Next;
+    end;
+
+    Map1.LockWindow(lmLock);
+    try
+      LayerHandle := Map1.AddLayer(Sf, True);
+      if LayerHandle = -1 then
+        raise Exception.Create('Failed to add temperature layer to map.');
+
+      Map1.LayerName[LayerHandle] := 'Temperature Points';
+      Map1.ShapeLayerDrawPoint[LayerHandle] := True;
+      Map1.ShapeLayerPointSize[LayerHandle] := 6;
+      Map1.ShapeLayerPointColor[LayerHandle] := clRed;
+      Map1.ZoomToLayer(LayerHandle);
+      Map1.Redraw;
+    finally
+      Map1.LockWindow(lmUnlock);
+    end;
+
+    RefreshLayerList;
+    MarkProjectDirty;
+  finally
+    QPoints.Free;
+    Conn.Free;
+  end;
+end;
 
 procedure TForm2.LogException(const AMethod: string; const E: Exception);
 begin
@@ -214,37 +456,40 @@ end;
 
 procedure TForm2.btnOpenClick(Sender: TObject);
 var
-  shp:IShapefile;
-  fName : string;
+  Fm: IFileManager;
+  LayerObject: OleVariant;
+  fName: string;
   HandleLayer: Integer;
 begin
   try
-    Map1.LockWindow(lmLock);
+    Fm := CoFileManager.Create;
+    if not Assigned(Fm) then
+      Exit;
+
     OpenDialog1.InitialDir := ExtractFilePath(ParamStr(0));
-    if (opendialog1.Execute) and (opendialog1.FileName <> '') then
-    begin
-      fName := opendialog1.FileName;
-      shp := CoShapefile.Create;
-      if Assigned(shp) and shp.Open(fName, nil) then
-      begin
-        if shp.HasSpatialIndex then
-          shp.UseSpatialIndex := True;
-        HandleLayer := Map1.AddLayer(shp,True);
-        if HandleLayer <> -1 then
-          Map1.ZoomToLayer(HandleLayer);
-      end
-      else if Assigned(shp) then
-      begin
-        ShowMessage(shp.ErrorMsg[shp.LastErrorCode]);
-        AppLogger.Error('uMap.btnOpenClick', shp.ErrorMsg[shp.LastErrorCode]);
-      end;
+    OpenDialog1.Filter := Fm.CdlgFilter;
+    if (not OpenDialog1.Execute) or (OpenDialog1.FileName = '') then
+      Exit;
+
+    fName := OpenDialog1.FileName;
+    LayerObject := Fm.Open(fName, fosAutoDetect, nil);
+    if not Fm.LastOpenIsSuccess then
+      raise Exception.Create('Failed to open layer source: ' + fName);
+
+    Map1.LockWindow(lmLock);
+    try
+      HandleLayer := Map1.AddLayer(LayerObject, True);
+      if HandleLayer = -1 then
+        raise Exception.Create('Map rejected layer: ' + fName);
+      Map1.ZoomToLayer(HandleLayer);
+      Map1.Redraw;
+    finally
+      Map1.LockWindow(lmUnlock);
     end;
-  except
-    on E: Exception do
-      LogException('btnOpenClick', E);
+
+    RefreshLayerList;
+    MarkProjectDirty;
   finally
-    Map1.LockWindow(lmUnlock);
-    Map1.Redraw;
     Map1.SetFocus;
   end;
 end;
@@ -252,173 +497,47 @@ end;
 
 procedure TForm2.Button1Click(Sender: TObject);
 var
-  selectedFile: string;
-  dlg: TOpenDialog;
-  img: IImage;
+  ProjectFile: string;
 begin
   try
-    selectedFile := '';
-    dlg := TOpenDialog.Create(nil);
-    try
-      img := CoImage.Create;
-      dlg.InitialDir := ExtractFilePath(ParamStr(0));
-      dlg.Filter := img.CdlgFilter;
-      if dlg.Execute(Handle) then
-       selectedFile := dlg.FileName;
-    finally
-      dlg.Free;
-    end;
-
-    if SameText(ExtractFileExt(selectedFile), '.tif') then
-    begin
-      Map1.LockWindow(lmLock);
+    ProjectFile := '';
+    with TOpenDialog.Create(nil) do
       try
-       if Assigned(img) and img.Open(selectedFile,TIFF_FILE,True,Nil) then
-       begin
-         lasthandle := Map1.AddLayer(img,True);
-         if lasthandle <> -1 then
-           Map1.ZoomToLayer(lasthandle);
-       end
-       else
-       begin
-         ShowMessage(img.ErrorMsg[img.LastErrorCode]);
-         AppLogger.Error('uMap.Button1Click', img.ErrorMsg[img.LastErrorCode]);
-       end;
+        InitialDir := ExtractFilePath(ParamStr(0));
+        Filter := 'MapWinGIS Project (*.mwxml)|*.mwxml|All files (*.*)|*.*';
+        if Execute(Handle) then
+          ProjectFile := FileName;
       finally
-       Map1.LockWindow(lmUnlock);
-       Map1.Redraw;
-       map1.SetFocus;
+        Free;
       end;
-    end;
+
+    if ProjectFile = '' then
+      Exit;
+
+    LoadProjectFromFile(ProjectFile);
+    Map1.SetFocus;
   except
     on E: Exception do
       LogException('Button1Click', E);
   end;
 end;
 
-procedure TForm2.Button2Click(Sender: TObject);
-var
-  ds : TOgrDatasource;
-  count, I, HandleLayer: integer;
-  lyr: OgrLayer;
-  foldergdb: string;
+procedure TForm2.btnGeoDatabaseClick(Sender: TObject);
 begin
   try
-    HandleLayer := -1;
-    foldergdb := '';
-    with TFileOpenDialog.Create(nil) do
-      try
-        Options := [fdoPickFolders];
-        if Execute then
-          foldergdb := FileName;
-      finally
-        Free;
-      end;
-
-    if foldergdb = '' then
-      Exit;
-
-    ds := TOgrDatasource.Create(Nil);
-    try
-      if not ds.Open(foldergdb) then
-      begin
-        ShowMessage('Failed to establish connection; '+ ds.GdalLastErrorMsg);
-        AppLogger.Error('uMap.Button2Click', ds.GdalLastErrorMsg);
-        Exit;
-      end;
-
-      Map1.LockWindow(lmLock);
-      try
-        count := ds.LayerCount;
-        for I := 0 to count - 1 do
-        begin
-          lyr := ds.GetLayer(I, False);
-          if not Assigned(lyr) then
-            Continue;
-          if CheckBox1.Checked then
-            HandleLayer := map1.AddLayer(lyr, True);
-          ListBox1.Items.Add(lyr.Name);
-        end;
-        if HandleLayer <> -1 then
-          Map1.ZoomToLayer(HandleLayer);
-        Map1.Redraw;
-        Map1.SetFocus;
-      finally
-        Map1.LockWindow(lmUnlock);
-      end;
-    finally
-      try
-        ds.Close();
-      except
-      end;
-      ds.Free;
-    end;
+    SaveProjectWithPrompt;
+    Map1.SetFocus;
   except
     on E: Exception do
-      LogException('Button2Click', E);
+      LogException('btnGeoDatabaseClick', E);
   end;
 end;
 
 procedure TForm2.Button3Click(Sender: TObject);
-var
-  ds : TOgrDatasource;
-  layer: string;
-  count,I,HandleLayer: integer;
-  lyr : OgrLayer;
-  dlg: TOpenDialog;
-  filter:string;
 begin
   try
-    filter := 'GeoPackage         (*.gpkg)|*.GPKG|'+
-    'Esri Shapefile (*.shp)|*.SHP|'+
-    'Vector GeoJSON files   (*.json)|*.JSON|'+
-    'Sqlite Vector      (*.sqlite)|*.SQLITE|'+
-    'Others Files Archives        (*.*)|*.*|';
-    layer := '';
-    HandleLayer := -1;
-    dlg := TOpenDialog.Create(nil);
-    try
-      dlg.InitialDir := ExtractFilePath(ParamStr(0));
-      dlg.Filter := filter;
-      if dlg.Execute(Handle) then
-       layer := dlg.FileName;
-    finally
-      dlg.Free;
-    end;
-    if layer = '' then
-      Exit;
-
-    ds := TOgrDatasource.Create(Nil);
-    try
-      if not ds.Open(layer) then
-      begin
-        ShowMessage('Failed to establish connection; '+ ds.GdalLastErrorMsg);
-        AppLogger.Error('uMap.Button3Click', ds.GdalLastErrorMsg);
-        Exit;
-      end;
-
-      Map1.LockWindow(lmLock);
-      try
-        count := ds.LayerCount;
-        for I := 0 to count - 1 do
-        begin
-          lyr := ds.GetLayer(I,False);
-          if not Assigned(lyr) then
-            Continue;
-          HandleLayer := map1.AddLayer(lyr,True);
-          ListBox1.Items.Add(lyr.Name);
-        end;
-        if HandleLayer <> -1 then
-          Map1.ZoomToLayer(HandleLayer);
-        Map1.Redraw;
-        Map1.SetFocus;
-      finally
-        Map1.LockWindow(lmUnlock);
-      end;
-    finally
-      ds.Close();
-      ds.Free;
-    end;
+    SetProjectionInteractive;
+    Map1.SetFocus;
   except
     on E: Exception do
       LogException('Button3Click', E);
@@ -429,100 +548,37 @@ procedure TForm2.Button4Click(Sender: TObject);
 begin
   try
     Map1.LockWindow(lmLock);
-    map1.RemoveAllLayers;
-    ListBox1.Items.Clear;
-    Map1.Redraw;
-    Map1.Latitude := 7.12057;
-    Map1.Longitude := -73.1194;
+    try
+      Map1.RemoveAllLayers;
+      Map1.Redraw;
+      ListBox1.Items.Clear;
+      lasthandle := -1;
+      FProjectFileName := '';
+      FProjectDirty := False;
+    finally
+      Map1.LockWindow(lmUnlock);
+    end;
     Map1.SetFocus;
-    lasthandle := -1;
-  except
-    on E: Exception do
-      LogException('Button4Click', E);
   finally
-    Map1.LockWindow(lmUnlock);
   end;
 end;
 
 procedure TForm2.Button5Click(Sender: TObject);
-var
- ds : TOgrDatasource;
-  count,HandleLayer: integer;
-  lyr : OgrLayer;
-  gs:GlobalSettings;
 begin
-  HandleLayer := -1;
-  ds := TOgrDatasource.Create(Nil);
   try
-    gs := CoGlobalSettings.Create;
-    gs.ReprojectLayersOnAdding:= True;
-
-    if not ds.Open('http://192.168.1.41:8080/geoserver/GIS/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=GIS%3Aapoyo&bbox=-73.130,7,-73.110,8&outputFormat=application%2Fjson') then
-    begin
-      ShowMessage('Failed to establish connection; '+ ds.GdalLastErrorMsg);
-      AppLogger.Error('uMap.Button5Click', ds.GdalLastErrorMsg);
-      Exit;
-    end;
-
-    Map1.LockWindow(lmLock);
-    try
-      count := ds.LayerCount;
-      if count > 0 then
-      begin
-        lyr := ds.GetLayer(0,False);
-        if Assigned(lyr) then
-        begin
-          HandleLayer := map1.AddLayer(lyr,True);
-          ListBox1.Items.Add(lyr.Name);
-        end;
-      end;
-      if HandleLayer <> -1 then
-        Map1.ZoomToLayer(HandleLayer);
-      Map1.Redraw;
-      Map1.SetFocus;
-    finally
-      Map1.LockWindow(lmUnlock);
-    end;
-  finally
-    try
-      ds.Close();
-    except
-    end;
-    ds.Free;
+    Map1.CursorMode := cmZoomIn;
+    Map1.SetFocus;
+  except
+    on E: Exception do
+      LogException('Button5Click', E);
   end;
 end;
 
 procedure TForm2.Button6Click(Sender: TObject);
-var
-  layerhandle:integer;
-  wmslayer: IWmsLayer;
-  ext:IExtents;
 begin
   try
-    layerhandle := -1;
-    WmsLayer := CoWmsLayer.Create;
-    ext := CoExtents.Create;
-    if (not Assigned(WmsLayer)) or (not Assigned(ext)) then
-      Exit;
-    ext.SetBounds(-20037508.3,-20037508.3,0,20037508.3,20037508.3,0);
-    WmsLayer.BaseUrl := 'http://192.168.1.15:8080/services/wms';
-    wmslayer.BoundingBox := ext;
-    wmslayer.Contrast := 1.0;
-    wmsLayer.DoCaching := false;
-    wmsLayer.Epsg := 3857;
-    wmsLayer.Format := 'image%2Fpng';
-    wmsLayer.Gamma := 1.0;
-    wmsLayer.Layers := 'osm-bright-2';
-    wmsLayer.Name := 'osm-bright-2';
-    wmsLayer.Opacity := 255;
-    wmsLayer.UseCache := false;
-    wmsLayer.Id := 1;
-    wmsLayer.UseTransparentColor := false;
-    wmsLayer.Key := inttostr(wvAuto);
-    layerHandle := Map1.AddLayer(wmsLayer, true);
-    if layerHandle = -1 then
-      AppLogger.Warning('uMap.Button6Click', 'Failed to add WMS layer');
-    map1.SetFocus;
+    Map1.CursorMode := cmZoomOut;
+    Map1.SetFocus;
   except
     on E: Exception do
       LogException('Button6Click', E);
@@ -530,33 +586,10 @@ begin
 end;
 
 procedure TForm2.Button7Click(Sender: TObject);
-var
-  gs: GlobalSettings;
-  conn,sqlOrLayerName: string;
-  handle: integer;
-  lyr:OgrLayer;
 begin
   try
-    conn := 'PG:host=192.168.1.41 port=5432 user=alex ****** dbname=gis';
-    sqlOrLayerName := 'SELECT * FROM apoyo';
-    handle := map1.AddLayerFromDatabase(conn, sqlOrLayerName, true);
-    if handle = -1 then
-    begin
-      gs := CoGlobalSettings.Create;
-      showmessage('Last GDAL error: ' + gs.GdalLastErrorMsg);
-      AppLogger.Error('uMap.Button7Click', gs.GdalLastErrorMsg);
-    end
-    else
-    begin
-      lyr := map1.OgrLayer[handle];
-      if Assigned(lyr) then
-      begin
-        Map1.ZoomToLayer(handle);
-        Map1.Redraw;
-        Map1.LockWindow(lmUnlock);
-        Map1.SetFocus;
-      end;
-    end;
+    Map1.CursorMode := cmPan;
+    Map1.SetFocus;
   except
     on E: Exception do
       LogException('Button7Click', E);
@@ -565,45 +598,28 @@ end;
 
 procedure TForm2.Button8Click(Sender: TObject);
 var
-  ds : TOgrDatasource;
-  count,HandleLayer: integer;
-  lyr : OgrLayer;
+  DbPath: string;
 begin
   try
-    HandleLayer := -1;
-    ds := TOgrDatasource.Create(Nil);
-    try
-      if not ds.Open('PG:host=192.168.1.41 port=5432 user=alex ****** dbname=gis') then
-      begin
-        ShowMessage('Failed to establish connection; '+ ds.GdalLastErrorMsg);
-        AppLogger.Error('uMap.Button8Click', ds.GdalLastErrorMsg);
-      end
-      else
-      begin
-        Map1.LockWindow(lmLock);
+    DbPath := ResolveDefaultDataDb;
+    if DbPath = '' then
+    begin
+      with TOpenDialog.Create(nil) do
         try
-          count := ds.LayerCount;
-          if count > 0 then
-          begin
-            lyr := ds.GetLayer(0,False);
-            if Assigned(lyr) then
-            begin
-              HandleLayer := map1.AddLayer(lyr,True);
-              ListBox1.Items.Add(lyr.Name);
-            end;
-          end;
-          if HandleLayer <> -1 then
-            Map1.ZoomToLayer(HandleLayer);
-          Map1.Redraw;
-          Map1.SetFocus;
+          InitialDir := ExtractFilePath(ParamStr(0));
+          Filter := 'SQLite database (*.db;*.db3;*.sqlite)|*.db;*.db3;*.sqlite|All files (*.*)|*.*';
+          if Execute(Handle) then
+            DbPath := FileName;
         finally
-          Map1.LockWindow(lmUnlock);
+          Free;
         end;
-      end;
-    finally
-      ds.Close();
-      ds.Free;
     end;
+
+    if DbPath = '' then
+      Exit;
+
+    LoadTemperatureData(DbPath);
+    Map1.SetFocus;
   except
     on E: Exception do
       LogException('Button8Click', E);
@@ -617,10 +633,29 @@ begin
   try
     gs := CoGlobalSettings.Create;
     gs.ShapefileFastMode := True;
-    gs.RandomColorSchemeForGrids := True;
-    gs.TilesThreadPoolSize := 3;
-    Map1.TileProvider := $FFFFFFFF;
-    map1.KnownExtents := keColombia;
+    gs.ZoomToFirstLayer := True;
+    gs.OgrLayerMaxFeatureCount := 25000;
+    gs.AllowLayersWithoutProjections := True;
+    gs.AllowProjectionMismatch := False;
+    gs.ReprojectLayersOnAdding := False;
+
+    Map1.Projection := PROJECTION_NONE;
+    Map1.TileProvider := ProviderNone;
+    Map1.SendMouseMove := True;
+
+    btnOpen.Caption := 'Add Layer';
+    Button1.Caption := 'Load Project';
+    btnGeoDatabase.Caption := 'Save Project';
+    Button3.Caption := 'Projection';
+    Button4.Caption := 'New Project';
+    Button5.Caption := 'Zoom In';
+    Button6.Caption := 'Zoom Out';
+    Button7.Caption := 'Pan';
+    Button8.Caption := 'LoadData';
+    CheckBox1.Visible := False;
+
+    FProjectFileName := '';
+    FProjectDirty := False;
     lasthandle := -1;
     AppLogger.Info('uMap.FormCreate', 'Map initialized');
   except
@@ -630,13 +665,9 @@ begin
 end;
 
 procedure TForm2.FormShow(Sender: TObject);
-var
-  objProj:IGeoProjection;
 begin
   try
-    objProj := CoGeoProjection.Create;
-    objProj.ImportFromEPSG(4326);
-    Map1.GeoProjection := objProj;
+    RefreshLayerList;
     map1.SetFocus;
   except
     on E: Exception do

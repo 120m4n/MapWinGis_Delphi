@@ -40,14 +40,14 @@ object Form2: TForm2
       TabOrder = 1
       OnClick = Button1Click
     end
-    object Button2: TButton
+    object btnGeoDatabase: TButton
       Left = 136
       Top = 17
       Width = 75
       Height = 25
       Caption = 'GeoDatabase'
       TabOrder = 2
-      OnClick = Button2Click
+      OnClick = btnGeoDatabaseClick
     end
     object Button3: TButton
       Left = 376
@@ -126,7 +126,7 @@ object Form2: TForm2
       0000000001000000000100000002000000030000000600000001000000FFFFFF
       FF00000000000000000000000000000000000000000000000000000000000000
       000000000001000000000000000000000100000004000000FFFFFFFFFFFFFFFF
-      000000000000}
+      00000000000000}
   end
   object ListBox1: TListBox
     Left = 0
