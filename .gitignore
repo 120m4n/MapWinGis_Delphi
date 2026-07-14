@@ -70,3 +70,4 @@ modules/
 *.db3
 GisDEMO-sharp/*
 Win32/*
+demo-sharp/*
