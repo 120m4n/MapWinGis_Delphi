@@ -24,6 +24,12 @@ begin
       TEditorHelper.ToggleEditLayer;
     ecSaveLayer:
       TEditorHelper.SaveLayerChanges;
+    ecUndo:
+      TEditorHelper.UndoLastEdit;
+    ecClearSelection:
+      TEditorHelper.ClearSelection;
+    ecEditFields:
+      TEditorHelper.EditSelectedShapeFields;
   end;
   TApp.RefreshUI;
 end;

@@ -86,6 +86,12 @@ begin
       TEditor.RunCommand(ecEditLayer);
     acSaveLayerEdits:
       TEditor.RunCommand(ecSaveLayer);
+    acUndoEdits:
+      TEditor.RunCommand(ecUndo);
+    acEditFields:
+      TEditor.RunCommand(ecEditFields);
+    acClearSelection:
+      TEditor.RunCommand(ecClearSelection);
     acSetProjection:
       if ExecuteSetProjectionDialog(TApp.Map) then
       begin

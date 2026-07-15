@@ -90,8 +90,23 @@ object MainForm: TMainForm
         Top = 0
         Caption = 'Save Edits'
       end
-      object toolSetProjection: TToolButton
+      object toolUndoEdits: TToolButton
         Left = 880
+        Top = 0
+        Caption = 'Undo'
+      end
+      object toolEditFields: TToolButton
+        Left = 960
+        Top = 0
+        Caption = 'Edit Fields'
+      end
+      object toolClearSelection: TToolButton
+        Left = 1040
+        Top = 0
+        Caption = 'Clear Sel'
+      end
+      object toolSetProjection: TToolButton
+        Left = 1120
         Top = 0
         Caption = 'Projection'
       end

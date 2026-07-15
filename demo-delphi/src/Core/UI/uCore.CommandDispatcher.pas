@@ -46,6 +46,12 @@ begin
     ACommand := acEditLayer
   else if Name = 'toolsavelayeredits' then
     ACommand := acSaveLayerEdits
+  else if Name = 'toolundoedits' then
+    ACommand := acUndoEdits
+  else if Name = 'tooleditfields' then
+    ACommand := acEditFields
+  else if Name = 'toolclearselection' then
+    ACommand := acClearSelection
   else if Name = 'toolsetprojection' then
     ACommand := acSetProjection
   else

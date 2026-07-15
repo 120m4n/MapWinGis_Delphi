@@ -25,6 +25,8 @@ type
     acAddDatabase,
     acEditLayer,
     acSaveLayerEdits,
+    acUndoEdits,
+    acEditFields,
     acSnapshot,
     acMeasure,
     acMeasureArea,

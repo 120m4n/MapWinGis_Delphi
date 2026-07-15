@@ -5,7 +5,10 @@ interface
 type
   TEditorCommand = (
     ecEditLayer,
-    ecSaveLayer
+    ecSaveLayer,
+    ecUndo,
+    ecClearSelection,
+    ecEditFields
   );
 
 implementation

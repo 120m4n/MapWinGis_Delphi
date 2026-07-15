@@ -36,6 +36,9 @@ type
     toolZoomMax: TToolButton;
     toolEditLayer: TToolButton;
     toolSaveLayerEdits: TToolButton;
+    toolUndoEdits: TToolButton;
+    toolEditFields: TToolButton;
+    toolClearSelection: TToolButton;
     toolSetProjection: TToolButton;
   private
     FDispatcher: TAppDispatcher;
@@ -103,6 +106,9 @@ begin
   toolZoomMax.OnClick := ToolButtonClick;
   toolEditLayer.OnClick := ToolButtonClick;
   toolSaveLayerEdits.OnClick := ToolButtonClick;
+  toolUndoEdits.OnClick := ToolButtonClick;
+  toolEditFields.OnClick := ToolButtonClick;
+  toolClearSelection.OnClick := ToolButtonClick;
   toolSetProjection.OnClick := ToolButtonClick;
 
   Project := TProject.Create;
